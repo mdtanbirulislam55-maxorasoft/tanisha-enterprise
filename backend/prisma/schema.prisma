@@ -1,0 +1,603 @@
+// ==================== TANISHA ENTERPRISE - COMPLETE BUSINESS SCHEMA ====================
+// Agricultural Machinery & Equipment Trading System
+// Version: 1.0.0 | Business: Tanisha Enterprise
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER & AUTHENTICATION MODELS ====================
+
+model User {
+  id            Int       @id @default(autoincrement())
+  username      String    @unique @db.VarChar(50)
+  email         String    @unique @db.VarChar(100)
+  password      String    @db.VarChar(255)
+  fullName      String    @db.VarChar(255)
+  phone         String?   @db.VarChar(20)
+
+  role          String    @default("staff") // admin, manager, staff, accountant
+  designation   String?   @db.VarChar(100)
+
+  profileImage  String?   @default("default-avatar.png") @db.VarChar(255)
+
+  // Branch Info
+  branchId      Int       @default(1)
+  branch        Branch    @relation(fields: [branchId], references: [id])
+
+  // Status
+  isActive      Boolean   @default(true)
+  lastLogin     DateTime?
+
+  // Email verification & password reset
+  emailVerified     Boolean   @default(false)
+  verificationToken String?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+
+  // Relations
+  refreshTokens RefreshToken[]
+
+  // Sales/Purchases created
+  salesCreated     Sale[]     @relation("SaleCreatedBy")
+  purchasesCreated Purchase[] @relation("PurchaseCreatedBy")
+
+  // Product audit
+  productsCreated  Product[]  @relation("ProductCreatedBy")
+  productsUpdated  Product[]  @relation("ProductUpdatedBy")
+
+  // Payments
+  paymentsCreated  Payment[]  @relation("PaymentCreatedBy")
+
+  // Servicing (IMPORTANT: opposite relations for ServiceRequest)
+  serviceRequestsCreated  ServiceRequest[] @relation("ServiceRequestCreatedBy")
+  serviceRequestsAssigned ServiceRequest[] @relation("ServiceRequestAssignedTo")
+  serviceRequestsUpdated  ServiceRequest[] @relation("ServiceRequestUpdatedBy")
+
+  // Stock
+  stockTransactionsCreated StockTransaction[] @relation("StockTransactionCreatedBy")
+  physicalStocksCreated    PhysicalStock[]    @relation("PhysicalStockCreatedBy")
+
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([role])
+}
+
+model RefreshToken {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique @db.VarChar(255)
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  expiresAt  DateTime
+  revoked    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ==================== BUSINESS STRUCTURE MODELS ====================
+
+model Branch {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(255)
+  address     String?  @db.Text
+  phone       String?  @db.VarChar(20)
+  email       String?  @db.VarChar(100)
+  isActive    Boolean  @default(true)
+
+  users       User[]
+  customers   Customer[]
+  suppliers   Supplier[]
+  products    Product[]
+  sales       Sale[]
+  purchases   Purchase[]
+  payments    Payment[]
+
+  // Stock
+  warehouses        Warehouse[]
+  stockTransactions StockTransaction[]
+  physicalStocks    PhysicalStock[]
+
+  // Servicing
+  serviceRequests   ServiceRequest[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== MASTER DATA ====================
+
+model Category {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique @db.VarChar(50)
+  name          String    @db.VarChar(100)
+  description   String?   @db.Text
+  parentId      Int?
+  parent        Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
+  children      Category[] @relation("CategoryToCategory")
+  products      Product[]
+  isActive      Boolean    @default(true)
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([code])
+  @@index([name])
+  @@index([parentId])
+}
+
+model Customer {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique @db.VarChar(50)
+  name          String    @db.VarChar(255)
+  phone         String    @db.VarChar(20)
+  email         String?   @db.VarChar(100)
+
+  address       String?   @db.Text
+  area          String?   @db.VarChar(100)
+  city          String?   @db.VarChar(100)
+  country       String?   @default("Bangladesh")
+
+  creditLimit    Decimal  @default(0) @db.Decimal(15, 2)
+  openingBalance Decimal  @default(0) @db.Decimal(15, 2)
+  currentBalance Decimal  @default(0) @db.Decimal(15, 2)
+
+  customerType  String?   @db.VarChar(100)
+  isActive      Boolean   @default(true)
+
+  branchId      Int       @default(1)
+  branch        Branch    @relation(fields: [branchId], references: [id])
+
+  sales         Sale[]
+  payments      Payment[]
+
+  // Servicing
+  serviceRequests ServiceRequest[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([phone])
+  @@index([name])
+}
+
+model Supplier {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique @db.VarChar(50)
+  name          String    @db.VarChar(255)
+
+  phone1        String    @db.VarChar(20)
+  phone2        String?   @db.VarChar(20)
+  email         String?   @db.VarChar(100)
+
+  address       String?   @db.Text
+  area          String?   @db.VarChar(100)
+  city          String?   @db.VarChar(100)
+  country       String?   @default("Bangladesh")
+
+  openingBalance Decimal? @default(0) @db.Decimal(15, 2)
+  currentBalance Decimal? @default(0) @db.Decimal(15, 2)
+
+  supplierType  String?   @db.VarChar(100)
+
+  isActive      Boolean   @default(true)
+
+  branchId      Int       @default(1)
+  branch        Branch    @relation(fields: [branchId], references: [id])
+
+  purchases     Purchase[]
+  products      Product[]
+  payments      Payment[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([phone1])
+  @@index([name])
+}
+
+// ==================== INVENTORY ====================
+
+model Product {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique @db.VarChar(50)
+  name          String    @db.VarChar(255)
+  description   String?   @db.Text
+
+  categoryId    Int
+  category      Category  @relation(fields: [categoryId], references: [id])
+  supplierId    Int?
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+
+  brand         String?   @db.VarChar(100)
+  model         String?   @db.VarChar(100)
+  origin        String?   @db.VarChar(100)
+  unit          String    @default("piece") @db.VarChar(50)
+  barcode       String?   @unique @db.VarChar(100)
+  images        Json?
+
+  costPrice      Decimal   @db.Decimal(15, 2)
+  sellPrice      Decimal   @db.Decimal(15, 2)
+  wholesalePrice Decimal?  @db.Decimal(15, 2)
+  minPrice       Decimal?  @db.Decimal(15, 2)
+
+  taxRate       Decimal   @default(0) @db.Decimal(5, 2)
+  hasVAT        Boolean   @default(false)
+
+  openingStock  Decimal   @default(0) @db.Decimal(10, 2)
+  stockQuantity Decimal   @default(0) @db.Decimal(10, 2)
+  reservedStock Decimal   @default(0) @db.Decimal(10, 2)
+  reorderLevel  Decimal   @default(10) @db.Decimal(10, 2)
+  alertQuantity Decimal   @default(5) @db.Decimal(10, 2)
+
+  hasBatch      Boolean   @default(false)
+  hasSerial     Boolean   @default(false)
+  hasExpiry     Boolean   @default(false)
+
+  warrantyMonths   Int?
+  minSellingPrice  Decimal? @db.Decimal(15, 2)
+  maxDiscount      Decimal? @db.Decimal(5, 2)
+
+  isService     Boolean   @default(false)
+  isActive      Boolean   @default(true)
+
+  branchId      Int       @default(1)
+  branch        Branch    @relation(fields: [branchId], references: [id])
+
+  saleItems     SaleItem[]
+  purchaseItems PurchaseItem[]
+
+  // Stock
+  stockTransactions StockTransaction[]
+  physicalStockItems PhysicalStockItem[]
+
+  // Audit
+  createdById   Int?
+  createdBy     User?     @relation("ProductCreatedBy", fields: [createdById], references: [id])
+  updatedById   Int?
+  updatedBy     User?     @relation("ProductUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([code])
+  @@index([name])
+  @@index([categoryId])
+  @@index([supplierId])
+  @@index([brand])
+  @@index([branchId])
+}
+
+// ==================== SALES ====================
+
+model Sale {
+  id            Int       @id @default(autoincrement())
+  invoiceNumber String    @unique @db.VarChar(50)
+  invoiceDate   DateTime  @default(now())
+
+  customerId    Int
+  customer      Customer  @relation(fields: [customerId], references: [id])
+  customerName  String    @db.VarChar(255)
+  customerPhone String    @db.VarChar(20)
+
+  subtotal       Decimal   @db.Decimal(15, 2)
+  discountAmount Decimal   @default(0) @db.Decimal(15, 2)
+  taxAmount      Decimal   @default(0) @db.Decimal(15, 2)
+  totalAmount    Decimal   @db.Decimal(15, 2)
+
+  paidAmount    Decimal   @default(0) @db.Decimal(15, 2)
+  dueAmount     Decimal   @db.Decimal(15, 2)
+
+  status        String    @default("pending") // pending, completed, cancelled
+  paymentStatus String    @default("unpaid")  // unpaid, partial, paid
+
+  reference     String?   @db.VarChar(100)
+  notes         String?   @db.Text
+
+  branchId      Int       @default(1)
+  branch        Branch    @relation(fields: [branchId], references: [id])
+
+  createdById   Int?
+  createdBy     User?     @relation("SaleCreatedBy", fields: [createdById], references: [id])
+
+  saleItems     SaleItem[]
+  payments      Payment[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([invoiceDate])
+  @@index([customerId])
+}
+
+model SaleItem {
+  id          Int     @id @default(autoincrement())
+  saleId      Int
+  sale        Sale    @relation(fields: [saleId], references: [id])
+
+  productId   Int
+  product     Product @relation(fields: [productId], references: [id])
+
+  productCode String  @db.VarChar(50)
+  productName String  @db.VarChar(255)
+  unit        String  @db.VarChar(50)
+
+  quantity    Decimal @db.Decimal(10, 2)
+  unitPrice   Decimal @db.Decimal(15, 2)
+  totalPrice  Decimal @db.Decimal(15, 2)
+
+  createdAt   DateTime @default(now())
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+// ==================== PURCHASES ====================
+
+model Purchase {
+  id             Int       @id @default(autoincrement())
+  invoiceNumber  String    @unique @db.VarChar(50)
+  invoiceDate    DateTime  @default(now())
+  deliveryDate   DateTime?
+
+  supplierId     Int
+  supplier       Supplier  @relation(fields: [supplierId], references: [id])
+  supplierName   String    @db.VarChar(255)
+  supplierPhone  String    @db.VarChar(20)
+
+  subtotal       Decimal   @db.Decimal(15, 2)
+  discountAmount Decimal   @default(0) @db.Decimal(15, 2)
+  taxAmount      Decimal   @default(0) @db.Decimal(15, 2)
+  totalAmount    Decimal   @db.Decimal(15, 2)
+
+  paidAmount     Decimal   @default(0) @db.Decimal(15, 2)
+  dueAmount      Decimal   @db.Decimal(15, 2)
+
+  status         String    @default("pending") // pending, ordered, received, cancelled
+  paymentStatus  String    @default("unpaid")  // unpaid, partial, paid
+
+  reference      String?   @db.VarChar(100)
+  notes          String?   @db.Text
+
+  branchId       Int       @default(1)
+  branch         Branch    @relation(fields: [branchId], references: [id])
+
+  createdById    Int?
+  createdBy      User?     @relation("PurchaseCreatedBy", fields: [createdById], references: [id])
+
+  purchaseItems  PurchaseItem[]
+  payments       Payment[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([invoiceDate])
+  @@index([supplierId])
+}
+
+model PurchaseItem {
+  id           Int      @id @default(autoincrement())
+  purchaseId   Int
+  purchase     Purchase @relation(fields: [purchaseId], references: [id])
+
+  productId    Int
+  product      Product  @relation(fields: [productId], references: [id])
+  productCode  String   @db.VarChar(50)
+  productName  String   @db.VarChar(255)
+  unit         String   @db.VarChar(50)
+
+  orderedQty   Decimal  @db.Decimal(10, 2)
+  receivedQty  Decimal  @default(0) @db.Decimal(10, 2)
+
+  unitCost     Decimal  @db.Decimal(15, 2)
+  totalCost    Decimal  @db.Decimal(15, 2)
+
+  remarks      String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  @@index([purchaseId])
+  @@index([productId])
+}
+
+// ==================== PAYMENTS ====================
+
+model Payment {
+  id            Int       @id @default(autoincrement())
+  paymentDate   DateTime  @default(now())
+  referenceNo   String    @unique @db.VarChar(50)
+
+  customerId    Int?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  supplierId    Int?
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+
+  saleId        Int?
+  sale          Sale?     @relation(fields: [saleId], references: [id])
+  purchaseId    Int?
+  purchase      Purchase? @relation(fields: [purchaseId], references: [id])
+
+  amount        Decimal   @db.Decimal(15, 2)
+  paymentMethod String    @default("cash") // cash, bank, bKash, nagad
+  status        String    @default("completed") // completed, pending, cancelled
+  notes         String?   @db.Text
+
+  branchId      Int       @default(1)
+  branch        Branch    @relation(fields: [branchId], references: [id])
+
+  createdById   Int?
+  createdBy     User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([paymentDate])
+  @@index([customerId])
+  @@index([supplierId])
+}
+
+// ==================== WAREHOUSE & STOCK TRANSACTIONS ====================
+
+model Warehouse {
+  id        Int     @id @default(autoincrement())
+  code      String  @unique @db.VarChar(50)
+  name      String  @db.VarChar(255)
+  address   String? @db.Text
+  isActive  Boolean @default(true)
+
+  branchId  Int     @default(1)
+  branch    Branch  @relation(fields: [branchId], references: [id])
+
+  stockTransactions StockTransaction[]
+  physicalStocks    PhysicalStock[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([branchId])
+}
+
+model StockTransaction {
+  id              Int      @id @default(autoincrement())
+  transactionNo   String   @unique @db.VarChar(50)
+  transactionDate DateTime @default(now())
+
+  type            String   @db.VarChar(50) // purchase, sale, adjustment, transfer_in, transfer_out, opening
+  referenceType   String?  @db.VarChar(50)
+  referenceId     String?  @db.VarChar(100)
+
+  productId       Int
+  product         Product  @relation(fields: [productId], references: [id])
+
+  warehouseId     Int?
+  warehouse       Warehouse? @relation(fields: [warehouseId], references: [id])
+
+  quantity        Decimal  @db.Decimal(10, 2)
+  unitCost        Decimal? @db.Decimal(15, 2)
+  totalCost       Decimal? @db.Decimal(15, 2)
+
+  notes           String?  @db.Text
+
+  branchId        Int      @default(1)
+  branch          Branch   @relation(fields: [branchId], references: [id])
+
+  createdById     Int?
+  createdBy       User?    @relation("StockTransactionCreatedBy", fields: [createdById], references: [id])
+
+  createdAt       DateTime @default(now())
+
+  @@index([branchId])
+  @@index([productId])
+  @@index([warehouseId])
+  @@index([transactionDate])
+}
+
+model PhysicalStock {
+  id          Int      @id @default(autoincrement())
+  stocktakeNo String   @unique @db.VarChar(50)
+  date        DateTime @default(now())
+  status      String   @default("draft") @db.VarChar(50) // draft, completed
+  notes       String?  @db.Text
+
+  warehouseId Int
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  branchId    Int    @default(1)
+  branch      Branch @relation(fields: [branchId], references: [id])
+
+  createdById Int?
+  createdBy   User? @relation("PhysicalStockCreatedBy", fields: [createdById], references: [id])
+
+  items       PhysicalStockItem[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([branchId])
+  @@index([warehouseId])
+}
+
+model PhysicalStockItem {
+  id              Int     @id @default(autoincrement())
+  physicalStockId Int
+  physicalStock   PhysicalStock @relation(fields: [physicalStockId], references: [id])
+
+  productId       Int
+  product         Product @relation(fields: [productId], references: [id])
+
+  systemQty       Decimal @default(0) @db.Decimal(10, 2)
+  countedQty      Decimal @default(0) @db.Decimal(10, 2)
+  variance        Decimal @default(0) @db.Decimal(10, 2)
+
+  notes           String? @db.Text
+
+  @@index([physicalStockId])
+  @@index([productId])
+}
+
+// ==================== SERVICE REQUESTS ====================
+
+model ServiceRequest {
+  id                Int       @id @default(autoincrement())
+  serviceNo          String    @unique @db.VarChar(50)
+
+  customerId         Int
+  customer           Customer  @relation(fields: [customerId], references: [id])
+
+  customerName       String    @db.VarChar(255)
+  customerPhone      String    @db.VarChar(20)
+
+  machineId          String?   @db.VarChar(100)
+  machineType        String?   @db.VarChar(100)
+  serialNo           String?   @db.VarChar(100)
+
+  problemDescription String    @db.Text
+  priority           String    @default("medium") @db.VarChar(20) // low, medium, high
+  serviceType        String    @default("repair") @db.VarChar(50) // repair, maintenance, warranty
+
+  estimatedCost      Decimal   @default(0) @db.Decimal(15, 2)
+  estimatedTime      Int       @default(0)
+
+  assignedTo         Int?
+  assignedTechnician User?     @relation("ServiceRequestAssignedTo", fields: [assignedTo], references: [id])
+
+  status             String    @default("pending") @db.VarChar(30) // pending, in_progress, completed, cancelled
+  notes              String?   @db.Text
+
+  actualCost         Decimal?  @db.Decimal(15, 2)
+  actualTime         Int?
+  completedAt        DateTime?
+  technicianNotes    String?   @db.Text
+
+  branchId           Int       @default(1)
+  branch             Branch    @relation(fields: [branchId], references: [id])
+
+  createdById        Int?
+  createdBy          User?     @relation("ServiceRequestCreatedBy", fields: [createdById], references: [id])
+
+  updatedById        Int?
+  updatedBy          User?     @relation("ServiceRequestUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([branchId])
+  @@index([customerId])
+  @@index([assignedTo])
+  @@index([status])
+}

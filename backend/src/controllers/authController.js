@@ -46,6 +46,84 @@ function getRefreshExpiry() {
 
 // ==================== CONTROLLERS ====================
 
+exports.register = async (req, res) => {
+  const { username, email, password, fullName, phone, role, branchId } = req.body;
+
+  try {
+    if (!username || !email || !password || !fullName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username, email, password, and fullName are required',
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [{ username }, { email }],
+      },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        error: 'User already exists',
+      });
+    }
+
+    // Validate role if provided
+    if (role && !isAllowedRole(role)) {
+      return res.status(400).json({
+        success: false,
+        error: `Role '${role}' is not allowed. Allowed roles: ${Object.values(ROLES).join(', ')}`,
+      });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const user = await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: hashedPassword,
+        fullName,
+        phone: phone || null,
+        role: role ? normalizeRole(role) : 'STAFF',
+        branchId: branchId || 1,
+        isActive: true,
+      },
+      include: {
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+      },
+    });
+
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: userWithoutPassword,
+        message: 'User registered successfully',
+      },
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+    });
+  }
+};
+
 exports.login = async (req, res) => {
   const { username, password } = req.body;
 

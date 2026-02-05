@@ -1,4 +1,4 @@
-﻿import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { authAPI, TokenManager } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -6,8 +6,7 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
   const [user, setUserState] = useState(() => TokenManager.getUser());
   const [loading, setLoading] = useState(true);
-
-  const isAuthenticated = useMemo(() => !!TokenManager.getAccessToken(), []);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => !!TokenManager.getAccessToken());
 
   const setUser = (u) => {
     setUserState(u || null);
@@ -19,6 +18,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const token = TokenManager.getAccessToken();
       if (!token) {
+        setIsAuthenticated(false);
         setLoading(false);
         return;
       }
@@ -30,9 +30,12 @@ export const AuthProvider = ({ children }) => {
       if (!verifyData?.success) {
         TokenManager.clearTokens();
         setUser(null);
+        setIsAuthenticated(false);
         setLoading(false);
         return;
       }
+
+      setIsAuthenticated(true);
 
       // Prefer backend-provided user from /auth/me (more reliable than token payload)
       const meRes = await authAPI.getCurrentUser();
@@ -47,6 +50,7 @@ export const AuthProvider = ({ children }) => {
     } catch (err) {
       TokenManager.clearTokens();
       setUser(null);
+      setIsAuthenticated(false);
     } finally {
       setLoading(false);
     }
@@ -71,6 +75,7 @@ export const AuthProvider = ({ children }) => {
 
     if (accessToken) TokenManager.setAccessToken(accessToken);
     if (refreshToken) TokenManager.setRefreshToken(refreshToken);
+    if (accessToken) setIsAuthenticated(true);
     if (userData) setUser(userData);
 
     return data;
@@ -85,6 +90,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       TokenManager.clearTokens();
       setUser(null);
+      setIsAuthenticated(false);
       window.location.href = '/login';
     }
   };
@@ -94,11 +100,11 @@ export const AuthProvider = ({ children }) => {
       user,
       setUser,
       loading,
-      isAuthenticated: !!TokenManager.getAccessToken(),
+      isAuthenticated,
       login,
       logout,
     }),
-    [user, loading]
+    [user, loading, isAuthenticated]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

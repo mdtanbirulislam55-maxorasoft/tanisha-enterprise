@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 
+const normalizeRole = (role) => (role ? String(role).trim().toLowerCase() : '');
+
 const getAccessSecret = () => {
   const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
   if (!secret) {
@@ -35,57 +37,32 @@ const protect = async (req, res, next) => {
       },
     });
 
-    if (!user) {
+    if (!user || !user.isActive) {
       return res.status(401).json({
         success: false,
-        error: 'User not found',
+        error: 'User not authorized',
       });
     }
 
-    if (!user.isActive) {
-      return res.status(401).json({
-        success: false,
-        error: 'User account is inactive',
-      });
-    }
-
-    req.user = {
-      userId: user.id,
-      username: user.username,
-      email: user.email,
-      role: user.role,
-      branchId: user.branchId,
-    };
-
+    req.user = { ...user, role: normalizeRole(user.role) };
     next();
   } catch (error) {
-    console.error('Auth middleware error:', error.message);
-    res.status(401).json({
+    return res.status(401).json({
       success: false,
-      error: 'Not authenticated',
+      error: 'Invalid or expired token',
     });
   }
 };
 
-// Role-based middleware
-const authorize = (...allowedRoles) => {
+const authorize = (...roles) => {
   return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Not authenticated',
-      });
-    }
-
-    const userRole = req.user.role?.toUpperCase();
-
-    if (!allowedRoles.includes(userRole)) {
+    const allowedRoles = roles.map(normalizeRole);
+    if (!allowedRoles.includes(normalizeRole(req.user.role))) {
       return res.status(403).json({
         success: false,
-        error: 'Not authorized',
+        error: 'Forbidden: insufficient permissions',
       });
     }
-
     next();
   };
 };

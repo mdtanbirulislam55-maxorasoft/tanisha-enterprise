@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -24,7 +24,7 @@ const Login = () => {
       navigate("/", { replace: true });
     } catch (err) {
       console.error("Login failed:", err);
-      setError("Invalid credentials. Try: admin@tanisha.com / password123");
+      setError("Invalid credentials. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -110,7 +110,7 @@ const Login = () => {
                     ? "bg-gray-700 border-gray-600 text-white"
                     : "bg-gray-50 border-gray-300 text-gray-900"
                 } focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
-                placeholder="admin@tanisha.com"
+                placeholder="you@example.com"
                 required
               />
             </div>
@@ -139,7 +139,7 @@ const Login = () => {
                     ? "bg-gray-700 border-gray-600 text-white"
                     : "bg-gray-50 border-gray-300 text-gray-900"
                 } focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent`}
-                placeholder="password123"
+                placeholder="••••••••"
                 required
               />
               <button
@@ -177,25 +177,6 @@ const Login = () => {
               </>
             )}
           </button>
-
-          {/* Demo Credentials */}
-          <div
-            className={`mt-6 p-4 rounded-xl ${
-              theme === "dark" ? "bg-gray-700/50" : "bg-blue-50"
-            } text-center`}
-          >
-            <p
-              className={`text-sm ${
-                theme === "dark" ? "text-gray-400" : "text-blue-700"
-              }`}
-            >
-              <strong>Demo Credentials:</strong>
-              <br />
-              Email: admin@tanisha.com
-              <br />
-              Password: password123
-            </p>
-          </div>
         </form>
 
         {/* Footer */}

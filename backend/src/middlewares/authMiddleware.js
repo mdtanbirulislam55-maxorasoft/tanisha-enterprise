@@ -2,10 +2,11 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 
 const getAccessSecret = () => {
-  if (!process.env.JWT_ACCESS_SECRET) {
-    throw new Error('JWT_ACCESS_SECRET missing in env');
+  const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET (or JWT_SECRET) missing in env');
   }
-  return process.env.JWT_ACCESS_SECRET;
+  return secret;
 };
 
 const protect = async (req, res, next) => {
@@ -34,31 +35,57 @@ const protect = async (req, res, next) => {
       },
     });
 
-    if (!user || !user.isActive) {
+    if (!user) {
       return res.status(401).json({
         success: false,
-        error: 'User not authorized',
+        error: 'User not found',
       });
     }
 
-    req.user = user;
+    if (!user.isActive) {
+      return res.status(401).json({
+        success: false,
+        error: 'User account is inactive',
+      });
+    }
+
+    req.user = {
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      branchId: user.branchId,
+    };
+
     next();
   } catch (error) {
-    return res.status(401).json({
+    console.error('Auth middleware error:', error.message);
+    res.status(401).json({
       success: false,
-      error: 'Invalid or expired token',
+      error: 'Not authenticated',
     });
   }
 };
 
-const authorize = (...roles) => {
+// Role-based middleware
+const authorize = (...allowedRoles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({
+    if (!req.user) {
+      return res.status(401).json({
         success: false,
-        error: 'Forbidden: insufficient permissions',
+        error: 'Not authenticated',
       });
     }
+
+    const userRole = req.user.role?.toUpperCase();
+
+    if (!allowedRoles.includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized',
+      });
+    }
+
     next();
   };
 };

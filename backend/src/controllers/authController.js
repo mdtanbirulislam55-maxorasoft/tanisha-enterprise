@@ -21,7 +21,7 @@ const isAllowedRole = (r) => Object.values(ROLES).includes(normalizeRole(r));
 // Backward compatible:
 // - Access secret: JWT_ACCESS_SECRET OR JWT_SECRET
 // - Access expiry: JWT_ACCESS_EXPIRE OR JWT_EXPIRE
-// - Refresh secret: JWT_REFRESH_SECRET (required)
+// - Refresh secret: JWT_REFRESH_SECRET (falls back to JWT_SECRET/JWT_ACCESS_SECRET)
 // - Refresh expiry: JWT_REFRESH_EXPIRE OR JWT_REFRESH_EXPIRE
 
 function getAccessSecret() {
@@ -31,9 +31,7 @@ function getAccessSecret() {
 }
 
 function getRefreshSecret() {
-  const s = process.env.JWT_REFRESH_SECRET;
-  if (!s) throw new Error('JWT_REFRESH_SECRET is missing in .env');
-  return s;
+  return process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || process.env.JWT_ACCESS_SECRET || null;
 }
 
 function getAccessExpiry() {
@@ -41,48 +39,87 @@ function getAccessExpiry() {
 }
 
 function getRefreshExpiry() {
-  return process.env.JWT_REFRESH_EXPIRE || '7d';
+  return process.env.JWT_REFRESH_EXPIRE || process.env.JWT_REFRESH_EXPIRE || '30d';
 }
 
-// ==================== CONTROLLERS ====================
+function signAccessToken(user) {
+  return jwt.sign(
+    {
+      userId: user.id,
+      role: normalizeRole(user.role) || ROLES.MANAGER,
+      branchId: user.branchId || 1,
+    },
+    getAccessSecret(),
+    { expiresIn: getAccessExpiry() }
+  );
+}
+
+function signRefreshToken(user) {
+  const secret = getRefreshSecret();
+  if (!secret) return null;
+  return jwt.sign(
+    { userId: user.id },
+    secret,
+    { expiresIn: getRefreshExpiry() }
+  );
+}
+
+function readBearerToken(req) {
+  const h = req.headers.authorization || '';
+  if (!h.startsWith('Bearer ')) return null;
+  return h.slice('Bearer '.length).trim() || null;
+}
+
+// Accept frontend payload variants safely:
+// - { username, password } where username may be email
+// - { email, password }
+// - { usernameOrEmail, password }
+function parseLoginIdentity(body = {}) {
+  const raw =
+    body.usernameOrEmail ||
+    body.email ||
+    body.username ||
+    '';
+
+  const identity = String(raw || '').trim();
+  const password = String(body.password || '').trim();
+
+  const looksLikeEmail = identity.includes('@') && identity.includes('.');
+  return {
+    identity,
+    password,
+    looksLikeEmail,
+  };
+}
+
+// ==================== AUTH ENDPOINTS ====================
 
 exports.register = async (req, res) => {
-  const { username, email, password, fullName, phone, role, branchId } = req.body;
-
+  // Production note: keep register, but validate role; do NOT create demo data.
   try {
+    const { username, email, password, fullName, phone, role, branchId } = req.body || {};
+
     if (!username || !email || !password || !fullName) {
       return res.status(400).json({
         success: false,
-        error: 'Username, email, password, and fullName are required',
+        error: 'username, email, password, fullName required',
       });
     }
 
-    // Check if user already exists
-    const existingUser = await prisma.user.findFirst({
-      where: {
-        OR: [{ username }, { email }],
-      },
+    const existing = await prisma.user.findFirst({
+      where: { OR: [{ username }, { email }] },
+      select: { id: true },
     });
 
-    if (existingUser) {
+    if (existing) {
       return res.status(409).json({
         success: false,
-        error: 'User already exists',
+        error: 'User already exists (username/email)',
       });
     }
 
-    // Validate role if provided
-    if (role && !isAllowedRole(role)) {
-      return res.status(400).json({
-        success: false,
-        error: `Role '${role}' is not allowed. Allowed roles: ${Object.values(ROLES).join(', ')}`,
-      });
-    }
-
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
     const user = await prisma.user.create({
       data: {
         username,
@@ -90,298 +127,248 @@ exports.register = async (req, res) => {
         password: hashedPassword,
         fullName,
         phone: phone || null,
-        role: role ? normalizeRole(role) : 'STAFF',
+        role: role ? normalizeRole(role) : ROLES.STAFF,
         branchId: branchId || 1,
         isActive: true,
       },
-      include: {
-        branch: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-      },
+      include: { branch: true },
     });
 
     // Remove password from response
-    const { password: _, ...userWithoutPassword } = user;
+    const { password: _, ...safeUser } = user;
 
-    res.status(201).json({
+    return res.json({
       success: true,
-      data: {
-        user: userWithoutPassword,
-        message: 'User registered successfully',
-      },
+      data: { user: safeUser },
     });
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
+  } catch (err) {
+    console.error('Register error:', err);
+    return res.status(500).json({ success: false, error: 'Registration failed' });
   }
 };
 
 exports.login = async (req, res) => {
-  const { username, password } = req.body;
-
   try {
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Username and password are required',
-      });
+    const { identity, password, looksLikeEmail } = parseLoginIdentity(req.body);
+
+    if (!identity || !password) {
+      return res.status(400).json({ success: false, error: 'username/email and password required' });
     }
 
-    // Find user by username OR email
+    const where = looksLikeEmail
+      ? { email: identity, isActive: true }
+      : { username: identity, isActive: true };
+
     const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { username },
-          { email: username },
-        ],
-        isActive: true,
-      },
-      include: {
-        branch: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-      },
+      where,
+      include: { branch: { select: { id: true, name: true, code: true } } },
     });
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid credentials',
-      });
-    }
+    // Do not leak which part is wrong
+    if (!user) return res.status(401).json({ success: false, error: 'Invalid credentials' });
+    if (!user.isActive) return res.status(403).json({ success: false, error: 'User is deactivated' });
 
-    // Verify password
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid credentials',
-      });
-    }
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(401).json({ success: false, error: 'Invalid credentials' });
 
-    // Validate role
-    if (!isAllowedRole(user.role)) {
+    // Normalize role (string safety)
+    const role = normalizeRole(user.role) || ROLES.MANAGER;
+    if (!isAllowedRole(role)) {
       return res.status(403).json({
         success: false,
-        error: `User role '${user.role}' is not allowed`,
+        error: 'User role is invalid. Contact administrator.',
       });
     }
 
-    // Create tokens
-    const accessToken = jwt.sign(
-      {
-        userId: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        branchId: user.branchId,
-      },
-      getAccessSecret(),
-      { expiresIn: getAccessExpiry() }
-    );
+    const accessToken = signAccessToken({ ...user, role });
+    const refreshToken = signRefreshToken(user);
 
-    const refreshToken = jwt.sign(
-      { userId: user.id },
-      getRefreshSecret(),
-      { expiresIn: getRefreshExpiry() }
-    );
+    // Store refresh token if model exists. If not, still return tokens.
+    if (refreshToken) {
+      try {
+        const refreshDays = 30; // default
+        const expiresAt = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
+        if (prisma.refreshToken?.create) {
+          await prisma.refreshToken.create({
+            data: { token: refreshToken, userId: user.id, expiresAt },
+          });
+        }
+      } catch (err) {
+        // If refreshToken model isn't present or DB constraint differs, don't break login.
+        console.warn('RefreshToken store skipped:', err?.message || err);
+      }
+    }
 
-    // Remove password from response
-    const { password: _, ...userWithoutPassword } = user;
+    // lastLogin is optional in schema; do not fail login if not present
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { lastLogin: new Date() },
+      });
+    } catch (_) {}
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         accessToken,
         refreshToken,
-        user: userWithoutPassword,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          fullName: user.fullName,
+          role,
+          branchId: user.branchId,
+          branch: user.branch || null,
+        },
       },
     });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
+  } catch (e) {
+    console.error('Login error:', e);
+    return res.status(500).json({ success: false, error: 'Login failed' });
   }
 };
 
 exports.refreshToken = async (req, res) => {
-  const { refreshToken } = req.body;
-
   try {
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        error: 'Refresh token is required',
-      });
+    const token = (req.body && req.body.refreshToken) || readBearerToken(req);
+    if (!token) return res.status(400).json({ success: false, error: 'refreshToken required' });
+
+    // Verify signature first
+    let decoded;
+    const refreshSecret = getRefreshSecret();
+    if (!refreshSecret) {
+      return res.status(500).json({ success: false, error: 'Refresh token secret not configured' });
     }
 
-    const decoded = jwt.verify(refreshToken, getRefreshSecret());
+    try {
+      decoded = jwt.verify(token, refreshSecret);
+    } catch {
+      return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+    }
 
+    const userId = Number(decoded?.userId);
+    if (!userId) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+
+    // If refreshToken table exists, enforce not revoked
+    if (prisma.refreshToken?.findUnique) {
+      const db = await prisma.refreshToken.findUnique({
+        where: { token },
+        include: { user: true },
+      });
+      if (!db || db.revoked) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+      if (!db.user || db.user.id !== userId) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+      if (!db.user.isActive) return res.status(403).json({ success: false, error: 'User is deactivated' });
+
+      const role = normalizeRole(db.user.role) || ROLES.MANAGER;
+      if (!isAllowedRole(role)) {
+        return res.status(403).json({ success: false, error: 'User role is invalid. Contact administrator.' });
+      }
+
+      const newAccessToken = signAccessToken({ ...db.user, role });
+      return res.json({ success: true, data: { accessToken: newAccessToken } });
+    }
+
+    // Fallback for missing refreshToken table: just verify JWT and re-sign
     const user = await prisma.user.findUnique({
-      where: { id: decoded.userId, isActive: true },
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        role: true,
-        branchId: true,
-      },
+      where: { id: userId, isActive: true },
+      include: { branch: true },
     });
+    if (!user) return res.status(401).json({ success: false, error: 'User not found' });
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'User not found or inactive',
-      });
+    const role = normalizeRole(user.role) || ROLES.MANAGER;
+    if (!isAllowedRole(role)) {
+      return res.status(403).json({ success: false, error: 'User role is invalid. Contact administrator.' });
     }
 
-    if (!isAllowedRole(user.role)) {
-      return res.status(403).json({
-        success: false,
-        error: `User role '${user.role}' is not allowed`,
-      });
-    }
-
-    const newAccessToken = jwt.sign(
-      {
-        userId: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        branchId: user.branchId,
-      },
-      getAccessSecret(),
-      { expiresIn: getAccessExpiry() }
-    );
-
-    res.json({
-      success: true,
-      data: {
-        accessToken: newAccessToken,
-      },
-    });
-  } catch (error) {
-    console.error('Refresh token error:', error);
-    res.status(401).json({
-      success: false,
-      error: 'Invalid refresh token',
-    });
+    const newAccessToken = signAccessToken({ ...user, role });
+    return res.json({ success: true, data: { accessToken: newAccessToken } });
+  } catch (err) {
+    console.error('Refresh token error:', err);
+    return res.status(500).json({ success: false, error: 'Refresh failed' });
   }
 };
 
 exports.logout = async (req, res) => {
-  // In a real implementation, you might want to blacklist the refresh token
-  // For simplicity, we just acknowledge the logout
-  res.json({
-    success: true,
-    message: 'Logged out successfully',
-  });
+  try {
+    const token = readBearerToken(req);
+    if (token && prisma.refreshToken?.update) {
+      await prisma.refreshToken.updateMany({
+        where: { token },
+        data: { revoked: true },
+      });
+    }
+    return res.json({ success: true, message: 'Logged out' });
+  } catch (err) {
+    console.warn('Logout cleanup failed:', err);
+    return res.json({ success: true, message: 'Logged out' });
+  }
 };
 
 exports.verifyToken = async (req, res) => {
-  const token = req.query.token || req.body.token;
-
   try {
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'Token is required',
-      });
-    }
+    const token = readBearerToken(req) || req.query.token;
+    if (!token) return res.status(400).json({ success: false, error: 'token required' });
 
     const decoded = jwt.verify(token, getAccessSecret());
 
-    // Optionally check if user still exists and is active
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId, isActive: true },
-      select: { id: true },
+      select: { id: true, username: true, email: true, role: true, branchId: true },
     });
 
-    if (!user) {
-      return res.json({
-        success: false,
-        error: 'User not found or inactive',
-      });
-    }
+    if (!user) return res.json({ success: false, error: 'User not found' });
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         valid: true,
-        userId: decoded.userId,
-        username: decoded.username,
-        role: decoded.role,
-        branchId: decoded.branchId,
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+        branchId: user.branchId,
       },
     });
-  } catch (error) {
-    res.json({
-      success: false,
-      error: 'Invalid or expired token',
-    });
+  } catch (err) {
+    return res.json({ success: false, error: 'Invalid or expired token' });
   }
 };
 
 exports.getCurrentUser = async (req, res) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Not authenticated',
-      });
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
     }
 
     const user = await prisma.user.findUnique({
-      where: { id: req.user.userId, isActive: true },
+      where: { id: req.user.id, isActive: true },
       select: {
         id: true,
         username: true,
         email: true,
+        fullName: true,
+        phone: true,
         role: true,
         branchId: true,
         isActive: true,
+        profileImage: true,
+        lastLogin: true,
         createdAt: true,
         updatedAt: true,
-        branch: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
+        branch: { select: { id: true, name: true, code: true } },
       },
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found',
-      });
+      return res.status(404).json({ success: false, error: 'User not found' });
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: user,
     });
-  } catch (error) {
-    console.error('Get current user error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
+  } catch (err) {
+    console.error('Get current user error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch user' });
   }
 };

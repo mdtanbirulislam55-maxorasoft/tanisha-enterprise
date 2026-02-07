@@ -25,7 +25,7 @@ const isAllowedRole = (r) => Object.values(ROLES).includes(normalizeRole(r));
 // - Refresh expiry: JWT_REFRESH_EXPIRE OR JWT_REFRESH_EXPIRE
 
 function getAccessSecret() {
-  const s = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+  const s = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || process.env.JWT_REFRESH_SECRET;
   if (!s) throw new Error('JWT_ACCESS_SECRET (or JWT_SECRET) is missing in .env');
   return s;
 }

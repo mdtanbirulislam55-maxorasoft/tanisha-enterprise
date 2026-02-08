@@ -95,6 +95,58 @@ function parseLoginIdentity(body = {}) {
 
 // ==================== CONTROLLERS ====================
 
+exports.register = async (req, res) => {
+  try {
+    const { username, email, password, fullName, role, branchId } = req.body;
+
+    // Validation
+    if (!username || !email || !password) {
+      return res.status(400).json({ success: false, error: 'Required fields missing' });
+    }
+
+    // Check if user already exists
+    const existing = await prisma.user.findFirst({
+      where: {
+        OR: [{ username }, { email }],
+      },
+    });
+
+    if (existing) {
+      return res.status(409).json({ success: false, error: 'Username or email already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const user = await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: hashedPassword,
+        fullName: fullName || null,
+        role: normalizeRole(role) || ROLES.STAFF,
+        branchId: branchId || 1,
+        isActive: true,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+      },
+    });
+  } catch (e) {
+    console.error('Registration error:', e);
+    return res.status(500).json({ success: false, error: 'Registration failed' });
+  }
+};
+
 exports.login = async (req, res) => {
   try {
     const { identity, password, looksLikeEmail, where } = parseLoginIdentity(req.body);
@@ -236,6 +288,29 @@ exports.refreshToken = async (req, res) => {
   }
 };
 
+exports.verifyToken = async (req, res) => {
+  try {
+    const token = readBearerToken(req);
+    if (!token) return res.status(401).json({ success: false, error: 'Token required' });
+
+    const decoded = jwt.verify(token, getAccessSecret());
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { id: true, isActive: true },
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, error: 'User not found or deactivated' });
+    }
+
+    return res.json({ success: true, message: 'Token is valid' });
+  } catch (e) {
+    console.error('Verify token error:', e);
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+};
+
 exports.logout = async (req, res) => {
   try {
     const token = (req.body && req.body.refreshToken) || readBearerToken(req);
@@ -269,54 +344,33 @@ exports.getCurrentUser = async (req, res) => {
         username: true,
         email: true,
         fullName: true,
+        phone: true,
         role: true,
         branchId: true,
         isActive: true,
-        branch: { select: { id: true, name: true, code: true } },
       },
     });
 
-    if (!user || !user.isActive) {
-      return res.status(401).json({ success: false, error: 'User not found or deactivated' });
-    }
+    if (!user) return res.status(401).json({ success: false, error: 'User not found' });
+    if (!user.isActive) return res.status(403).json({ success: false, error: 'User is deactivated' });
 
-    return res.json({
-      success: true,
-      data: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        fullName: user.fullName,
-        role: normalizeRole(user.role) || ROLES.MANAGER,
-        branchId: user.branchId,
-        branch: user.branch || null,
-      },
-    });
+    const role = normalizeRole(user.role) || ROLES.MANAGER;
+    return res.json({ success: true, data: { ...user, role } });
   } catch (e) {
-    console.error('Get current user error:', e);
-    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    console.error('GetCurrentUser error:', e);
+    return res.status(500).json({ success: false, error: 'Failed to fetch user' });
   }
 };
 
-exports.verifyToken = async (req, res) => {
-  try {
-    const token = readBearerToken(req);
-    if (!token) return res.status(401).json({ success: false, error: 'Token required' });
+// Export roles (useful for middleware validation)
+exports.ROLES = ROLES;
 
-    const decoded = jwt.verify(token, getAccessSecret());
-
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, isActive: true },
-    });
-
-    if (!user || !user.isActive) {
-      return res.status(401).json({ success: false, error: 'User not found or deactivated' });
-    }
-
-    return res.json({ success: true, message: 'Token is valid' });
-  } catch (e) {
-    console.error('Verify token error:', e);
-    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
-  }
+module.exports = {
+  register: exports.register,
+  login: exports.login,
+  refreshToken: exports.refreshToken,
+  verifyToken: exports.verifyToken,
+  logout: exports.logout,
+  getCurrentUser: exports.getCurrentUser,
+  ROLES,
 };

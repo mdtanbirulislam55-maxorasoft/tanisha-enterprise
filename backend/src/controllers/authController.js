@@ -85,7 +85,6 @@ function parseLoginIdentity(body = {}) {
   const password = String(body.password || '').trim();
 
   const looksLikeEmail = identity.includes('@') && identity.includes('.');
-
   const where = looksLikeEmail
     ? { email: identity }
     : { username: identity };
@@ -291,7 +290,7 @@ exports.refreshToken = async (req, res) => {
 exports.verifyToken = async (req, res) => {
   try {
     const token = readBearerToken(req);
-    if (!token) return res.status(401).json({ success: false, error: 'Token required' });
+    if (!token) return res.status(400).json({ success: false, error: 'Token required' });
 
     const decoded = jwt.verify(token, getAccessSecret());
 

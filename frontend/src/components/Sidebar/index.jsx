@@ -1,9 +1,10 @@
 // frontend/src/components/Sidebar/index.jsx
 import React from 'react';
-import { Box, Drawer, List, ListItem, ListItemIcon, ListItemText, Typography } from '@mui/material';
+import { Box, Drawer, List, ListItem, ListItemIcon, ListItemText, Typography, IconButton, Divider } from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
 import { useAuth } from '../../contexts/AuthContext';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 // Icons
 import DashboardIcon from '@mui/icons-material/Dashboard';
@@ -15,40 +16,81 @@ import PeopleIcon from '@mui/icons-material/People';
 import AssessmentIcon from '@mui/icons-material/Assessment';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
-const drawerWidth = 280;
+import tanishaLogo from '../../assets/tanisha-logo.jpg';
+import maxoraLogo from '../../assets/maxorasoft-logo.png';
 
-const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
+const Sidebar = ({ mobileOpen, handleDrawerToggle, collapsed, setCollapsed, drawerWidth, collapsedDrawerWidth }) => {
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const { logout } = useAuth();
+  const { language } = useLanguage();
 
   const menuItems = [
-    { text: 'ড্যাশবোর্ড', icon: <DashboardIcon />, path: '/' },
-    { text: 'বিক্রয়', icon: <PointOfSaleIcon />, path: '/sales' },
-    { text: 'ক্রয়', icon: <ShoppingCartIcon />, path: '/purchase' },
+    { text: language === 'bn' ? 'ড্যাশবোর্ড' : 'Dashboard', icon: <DashboardIcon />, path: '/' },
+    { text: language === 'bn' ? 'বিক্রয়' : 'Sales', icon: <PointOfSaleIcon />, path: '/sales' },
+    { text: language === 'bn' ? 'ক্রয়' : 'Purchase', icon: <ShoppingCartIcon />, path: '/purchase' },
 
-    // If you don’t have these pages yet, keep them but expect 404 routes.
-    { text: 'সার্ভিসিং', icon: <BuildIcon />, path: '/servicing/requests' },
-    { text: 'স্টক', icon: <InventoryIcon />, path: '/stock/current' },
+    // If you don't have these pages yet, keep them but expect 404 routes.
+    { text: language === 'bn' ? 'সার্ভিসিং' : 'Servicing', icon: <BuildIcon />, path: '/servicing/requests' },
+    { text: language === 'bn' ? 'স্টক' : 'Stock', icon: <InventoryIcon />, path: '/stock/current' },
 
-    { text: 'পণ্য', icon: <InventoryIcon />, path: '/products' },
-    { text: 'গ্রাহক', icon: <PeopleIcon />, path: '/customers' },
-    { text: 'রিপোর্ট', icon: <AssessmentIcon />, path: '/reports/sales' },
-    { text: 'সেটিংস', icon: <SettingsIcon />, path: '/settings/company' },
+    { text: language === 'bn' ? 'পণ্য' : 'Products', icon: <InventoryIcon />, path: '/products' },
+    { text: language === 'bn' ? 'গ্রাহক' : 'Customers', icon: <PeopleIcon />, path: '/customers' },
+    { text: language === 'bn' ? 'রিপোর্ট' : 'Reports', icon: <AssessmentIcon />, path: '/reports/sales' },
+    { text: language === 'bn' ? 'সেটিংস' : 'Settings', icon: <SettingsIcon />, path: '/settings/company' },
   ];
 
-  const drawer = (
+  const drawerContent = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Logo Section */}
-      <Box sx={{ p: 3, textAlign: 'center', borderBottom: `1px solid ${theme.palette.divider}` }}>
-        <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'primary.main' }}>
-          তানিশা এন্টারপ্রাইজ
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-          Premium Business Suite
-        </Typography>
+      <Box
+        sx={{
+          p: 2,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'space-between',
+          gap: 1.5,
+          borderBottom: `1px solid ${theme.palette.divider}`,
+        }}
+      >
+        <Box
+          component="img"
+          src={tanishaLogo}
+          alt="Tanisha Enterprise"
+          sx={{
+            width: collapsed ? 48 : 52,
+            height: collapsed ? 48 : 52,
+            borderRadius: '50%',
+            objectFit: 'cover',
+            border: '2px solid',
+            borderColor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)',
+            boxShadow: theme.palette.mode === 'dark'
+              ? '0 6px 18px rgba(0,0,0,0.35)'
+              : '0 6px 18px rgba(0,0,0,0.12)',
+          }}
+        />
+        {!collapsed && (
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, color: 'primary.main' }}>
+              Tanisha ERP
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              Premium Business Suite
+            </Typography>
+          </Box>
+        )}
+        <IconButton
+          size="small"
+          onClick={() => setCollapsed(!collapsed)}
+          sx={{ display: { xs: 'none', md: 'inline-flex' } }}
+          aria-label="Toggle sidebar"
+        >
+          {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+        </IconButton>
       </Box>
 
       {/* Menu Items */}
@@ -60,8 +102,9 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
             onClick={() => navigate(item.path)}
             sx={{
               mb: 1,
-              mx: 2,
+              mx: collapsed ? 1 : 2,
               borderRadius: 2,
+              justifyContent: collapsed ? 'center' : 'flex-start',
               backgroundColor: location.pathname === item.path ? 'primary.main' : 'transparent',
               color: location.pathname === item.path ? 'white' : 'inherit',
               '&:hover': {
@@ -69,13 +112,30 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
               },
             }}
           >
-            <ListItemIcon sx={{ color: location.pathname === item.path ? 'white' : 'inherit' }}>
+            <ListItemIcon sx={{ color: location.pathname === item.path ? 'white' : 'inherit', minWidth: collapsed ? 'auto' : 40 }}>
               {item.icon}
             </ListItemIcon>
-            <ListItemText primary={item.text} />
+            {!collapsed && <ListItemText primary={item.text} />}
           </ListItem>
         ))}
       </List>
+
+      <Divider sx={{ mx: 2, mb: 1 }} />
+
+      {/* Credit Footer */}
+      {!collapsed && (
+        <Box sx={{ px: 2, pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            component="img"
+            src={maxoraLogo}
+            alt="MaxoraSoft"
+            sx={{ width: 24, height: 24 }}
+          />
+          <Typography variant="caption" color="text.secondary">
+            Prepared by Engr. Tanbir Rifat | MaxoraSoft
+          </Typography>
+        </Box>
+      )}
 
       {/* Logout Section */}
       <Box sx={{ p: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
@@ -87,13 +147,14 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
           }}
           sx={{
             borderRadius: 2,
+            justifyContent: collapsed ? 'center' : 'flex-start',
             '&:hover': { backgroundColor: 'error.light', color: 'error.contrastText' },
           }}
         >
-          <ListItemIcon>
+          <ListItemIcon sx={{ minWidth: collapsed ? 'auto' : 40 }}>
             <LogoutIcon />
           </ListItemIcon>
-          <ListItemText primary="লগআউট" />
+          {!collapsed && <ListItemText primary={language === 'bn' ? 'লগআউট' : 'Logout'} />}
         </ListItem>
       </Box>
     </Box>
@@ -112,7 +173,7 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
           '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
         }}
       >
-        {drawer}
+        {drawerContent}
       </Drawer>
 
       {/* Desktop Drawer */}
@@ -120,11 +181,19 @@ const Sidebar = ({ mobileOpen, handleDrawerToggle }) => {
         variant="permanent"
         sx={{
           display: { xs: 'none', md: 'block' },
-          '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+          '& .MuiDrawer-paper': {
+            boxSizing: 'border-box',
+            width: collapsed ? collapsedDrawerWidth : drawerWidth,
+            overflowX: 'hidden',
+            transition: theme.transitions.create('width', {
+              easing: theme.transitions.easing.sharp,
+              duration: theme.transitions.duration.shorter,
+            }),
+          },
         }}
         open
       >
-        {drawer}
+        {drawerContent}
       </Drawer>
     </>
   );

@@ -50,38 +50,18 @@ const Login = () => {
           <div className="w-16 h-16 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg">
             <span className="text-white font-bold text-2xl">TE</span>
           </div>
-          <h1
-            className={`text-3xl font-bold ${
-              theme === "dark" ? "text-white" : "text-gray-900"
-            }`}
-          >
-            Tanisha Enterprise
+          <h1 className={`text-2xl font-bold ${theme === "dark" ? "text-white" : "text-gray-900"}`}>
+            Tanisha Enterprise ERP
           </h1>
-          <p
-            className={`mt-2 ${
-              theme === "dark" ? "text-gray-400" : "text-gray-600"
-            }`}
-          >
-            Premium Business Management Suite
+          <p className={`text-sm mt-2 ${theme === "dark" ? "text-gray-400" : "text-gray-600"}`}>
+            Premium Dashboard • Admin Console
           </p>
         </div>
 
         {/* Error Message */}
         {error && (
-          <div
-            className={`mb-6 p-4 rounded-xl ${
-              theme === "dark"
-                ? "bg-red-900/30 border border-red-700"
-                : "bg-red-50 border border-red-200"
-            }`}
-          >
-            <p
-              className={`text-sm ${
-                theme === "dark" ? "text-red-300" : "text-red-600"
-              }`}
-            >
-              {error}
-            </p>
+          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-600 dark:text-red-400 text-sm">
+            {error}
           </div>
         )}
 

@@ -85,79 +85,23 @@ function parseLoginIdentity(body = {}) {
   const password = String(body.password || '').trim();
 
   const looksLikeEmail = identity.includes('@') && identity.includes('.');
-  return {
-    identity,
-    password,
-    looksLikeEmail,
-  };
+
+  const where = looksLikeEmail
+    ? { email: identity }
+    : { username: identity };
+
+  return { identity, password, looksLikeEmail, where };
 }
 
-// ==================== AUTH ENDPOINTS ====================
-
-exports.register = async (req, res) => {
-  // Production note: keep register, but validate role; do NOT create demo data.
-  try {
-    const { username, email, password, fullName, phone, role, branchId } = req.body || {};
-
-    if (!username || !email || !password || !fullName) {
-      return res.status(400).json({
-        success: false,
-        error: 'username, email, password, fullName required',
-      });
-    }
-
-    const existing = await prisma.user.findFirst({
-      where: { OR: [{ username }, { email }] },
-      select: { id: true },
-    });
-
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: 'User already exists (username/email)',
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await prisma.user.create({
-      data: {
-        username,
-        email,
-        password: hashedPassword,
-        fullName,
-        phone: phone || null,
-        role: role ? normalizeRole(role) : ROLES.STAFF,
-        branchId: branchId || 1,
-        isActive: true,
-      },
-      include: { branch: true },
-    });
-
-    // Remove password from response
-    const { password: _, ...safeUser } = user;
-
-    return res.json({
-      success: true,
-      data: { user: safeUser },
-    });
-  } catch (err) {
-    console.error('Register error:', err);
-    return res.status(500).json({ success: false, error: 'Registration failed' });
-  }
-};
+// ==================== CONTROLLERS ====================
 
 exports.login = async (req, res) => {
   try {
-    const { identity, password, looksLikeEmail } = parseLoginIdentity(req.body);
+    const { identity, password, looksLikeEmail, where } = parseLoginIdentity(req.body);
 
     if (!identity || !password) {
-      return res.status(400).json({ success: false, error: 'username/email and password required' });
+      return res.status(400).json({ success: false, error: 'Email/Username and password required' });
     }
-
-    const where = looksLikeEmail
-      ? { email: identity, isActive: true }
-      : { username: identity, isActive: true };
 
     const user = await prisma.user.findFirst({
       where,
@@ -269,12 +213,15 @@ exports.refreshToken = async (req, res) => {
       return res.json({ success: true, data: { accessToken: newAccessToken } });
     }
 
-    // Fallback for missing refreshToken table: just verify JWT and re-sign
+    // If refreshToken table doesn't exist, just verify the JWT and generate a new access token
     const user = await prisma.user.findUnique({
-      where: { id: userId, isActive: true },
-      include: { branch: true },
+      where: { id: userId },
+      select: { id: true, role: true, isActive: true },
     });
-    if (!user) return res.status(401).json({ success: false, error: 'User not found' });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+    }
 
     const role = normalizeRole(user.role) || ROLES.MANAGER;
     if (!isAllowedRole(role)) {
@@ -283,92 +230,93 @@ exports.refreshToken = async (req, res) => {
 
     const newAccessToken = signAccessToken({ ...user, role });
     return res.json({ success: true, data: { accessToken: newAccessToken } });
-  } catch (err) {
-    console.error('Refresh token error:', err);
-    return res.status(500).json({ success: false, error: 'Refresh failed' });
+  } catch (e) {
+    console.error('Refresh token error:', e);
+    return res.status(500).json({ success: false, error: 'Token refresh failed' });
   }
 };
 
 exports.logout = async (req, res) => {
   try {
-    const token = readBearerToken(req);
-    if (token && prisma.refreshToken?.update) {
+    const token = (req.body && req.body.refreshToken) || readBearerToken(req);
+    if (!token) return res.status(400).json({ success: false, error: 'refreshToken required' });
+
+    // If refreshToken table exists, revoke the token
+    if (prisma.refreshToken?.update) {
       await prisma.refreshToken.updateMany({
         where: { token },
         data: { revoked: true },
       });
     }
-    return res.json({ success: true, message: 'Logged out' });
-  } catch (err) {
-    console.warn('Logout cleanup failed:', err);
-    return res.json({ success: true, message: 'Logged out' });
-  }
-};
 
-exports.verifyToken = async (req, res) => {
-  try {
-    const token = readBearerToken(req) || req.query.token;
-    if (!token) return res.status(400).json({ success: false, error: 'token required' });
-
-    const decoded = jwt.verify(token, getAccessSecret());
-
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId, isActive: true },
-      select: { id: true, username: true, email: true, role: true, branchId: true },
-    });
-
-    if (!user) return res.json({ success: false, error: 'User not found' });
-
-    return res.json({
-      success: true,
-      data: {
-        valid: true,
-        userId: user.id,
-        username: user.username,
-        role: user.role,
-        branchId: user.branchId,
-      },
-    });
-  } catch (err) {
-    return res.json({ success: false, error: 'Invalid or expired token' });
+    return res.json({ success: true, message: 'Logged out successfully' });
+  } catch (e) {
+    console.error('Logout error:', e);
+    return res.status(500).json({ success: false, error: 'Logout failed' });
   }
 };
 
 exports.getCurrentUser = async (req, res) => {
   try {
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ success: false, error: 'Not authenticated' });
-    }
+    const token = readBearerToken(req);
+    if (!token) return res.status(401).json({ success: false, error: 'Not authenticated' });
 
+    const decoded = jwt.verify(token, getAccessSecret());
     const user = await prisma.user.findUnique({
-      where: { id: req.user.id, isActive: true },
+      where: { id: decoded.userId },
       select: {
         id: true,
         username: true,
         email: true,
         fullName: true,
-        phone: true,
         role: true,
         branchId: true,
         isActive: true,
-        profileImage: true,
-        lastLogin: true,
-        createdAt: true,
-        updatedAt: true,
         branch: { select: { id: true, name: true, code: true } },
       },
     });
 
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, error: 'User not found or deactivated' });
     }
 
     return res.json({
       success: true,
-      data: user,
+      data: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        fullName: user.fullName,
+        role: normalizeRole(user.role) || ROLES.MANAGER,
+        branchId: user.branchId,
+        branch: user.branch || null,
+      },
     });
-  } catch (err) {
-    console.error('Get current user error:', err);
-    return res.status(500).json({ success: false, error: 'Failed to fetch user' });
+  } catch (e) {
+    console.error('Get current user error:', e);
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+};
+
+exports.verifyToken = async (req, res) => {
+  try {
+    const token = readBearerToken(req);
+    if (!token) return res.status(401).json({ success: false, error: 'Token required' });
+
+    const decoded = jwt.verify(token, getAccessSecret());
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { id: true, isActive: true },
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, error: 'User not found or deactivated' });
+    }
+
+    return res.json({ success: true, message: 'Token is valid' });
+  } catch (e) {
+    console.error('Verify token error:', e);
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
 };

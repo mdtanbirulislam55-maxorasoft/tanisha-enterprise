@@ -387,3 +387,13 @@ exports.getCurrentUser = async (req, res) => {
 
 // Export roles (useful for middleware validation)
 exports.ROLES = ROLES;
+
+module.exports = {
+  register: exports.register,
+  login: exports.login,
+  refreshToken: exports.refreshToken,
+  verifyToken: exports.verifyToken,
+  logout: exports.logout,
+  getCurrentUser: exports.getCurrentUser,
+  ROLES,
+};

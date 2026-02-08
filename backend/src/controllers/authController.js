@@ -85,74 +85,93 @@ function parseLoginIdentity(body = {}) {
   const password = String(body.password || '').trim();
 
   const looksLikeEmail = identity.includes('@') && identity.includes('.');
-  const where = looksLikeEmail
-    ? { email: identity }
-    : { username: identity };
-
-  return { identity, password, looksLikeEmail, where };
+  return {
+    identity,
+    password,
+    looksLikeEmail,
+  };
 }
 
-// ==================== CONTROLLERS ====================
+// ==================== AUTH ENDPOINTS ====================
 
 exports.register = async (req, res) => {
+  // Production note: keep register, but validate role; do NOT create demo data.
   try {
-    const { username, email, password, fullName, role, branchId } = req.body;
+    const { username, email, password, fullName, phone, role, branchId } = req.body || {};
 
-    // Validation
-    if (!username || !email || !password) {
-      return res.status(400).json({ success: false, error: 'Required fields missing' });
+    if (!username || !email || !password || !fullName) {
+      return res.status(400).json({
+        success: false,
+        error: 'username, email, password, fullName required',
+      });
     }
 
-    // Check if user already exists
     const existing = await prisma.user.findFirst({
-      where: {
-        OR: [{ username }, { email }],
-      },
+      where: { OR: [{ username }, { email }] },
+      select: { id: true },
     });
 
     if (existing) {
-      return res.status(409).json({ success: false, error: 'Username or email already exists' });
+      return res.status(409).json({
+        success: false,
+        error: 'User already exists (username/email)',
+      });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const finalRole = normalizeRole(role) || ROLES.MANAGER;
+    if (!isAllowedRole(finalRole)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid role. Allowed: ${Object.values(ROLES).join(', ')}`,
+      });
+    }
 
-    // Create user
+    const hashed = await bcrypt.hash(password, 12);
+
     const user = await prisma.user.create({
       data: {
-        username,
-        email,
-        password: hashedPassword,
-        fullName: fullName || null,
-        role: normalizeRole(role) || ROLES.STAFF,
-        branchId: branchId || 1,
+        username: String(username).trim(),
+        email: String(email).trim().toLowerCase(),
+        password: hashed,
+        fullName: String(fullName).trim(),
+        phone: phone ? String(phone).trim() : null,
+        role: finalRole,
+        branchId: branchId ? Number(branchId) : 1,
+        isActive: true,
+        emailVerified: true,
+      },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        fullName: true,
+        role: true,
+        branchId: true,
         isActive: true,
       },
     });
 
-    return res.status(201).json({
-      success: true,
-      data: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
-      },
-    });
+    return res.status(201).json({ success: true, data: user });
   } catch (e) {
-    console.error('Registration error:', e);
-    return res.status(500).json({ success: false, error: 'Registration failed' });
+    console.error('Register error:', e);
+    return res.status(500).json({ success: false, error: 'Register failed' });
   }
 };
 
 exports.login = async (req, res) => {
   try {
-    const { identity, password, looksLikeEmail, where } = parseLoginIdentity(req.body);
+    const { identity, password, looksLikeEmail } = parseLoginIdentity(req.body);
 
     if (!identity || !password) {
-      return res.status(400).json({ success: false, error: 'Email/Username and password required' });
+      return res.status(400).json({
+        success: false,
+        error: 'username/email and password required',
+      });
     }
+
+    const where = looksLikeEmail
+      ? { email: identity.toLowerCase() }
+      : { username: identity };
 
     const user = await prisma.user.findFirst({
       where,
@@ -264,15 +283,14 @@ exports.refreshToken = async (req, res) => {
       return res.json({ success: true, data: { accessToken: newAccessToken } });
     }
 
-    // If refreshToken table doesn't exist, just verify the JWT and generate a new access token
+    // If no refreshToken table, still allow refresh using JWT validity
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, role: true, isActive: true },
+      select: { id: true, role: true, branchId: true, isActive: true, username: true, email: true, fullName: true },
     });
 
-    if (!user || !user.isActive) {
-      return res.status(401).json({ success: false, error: 'Invalid refresh token' });
-    }
+    if (!user) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+    if (!user.isActive) return res.status(403).json({ success: false, error: 'User is deactivated' });
 
     const role = normalizeRole(user.role) || ROLES.MANAGER;
     if (!isAllowedRole(role)) {
@@ -282,48 +300,55 @@ exports.refreshToken = async (req, res) => {
     const newAccessToken = signAccessToken({ ...user, role });
     return res.json({ success: true, data: { accessToken: newAccessToken } });
   } catch (e) {
-    console.error('Refresh token error:', e);
-    return res.status(500).json({ success: false, error: 'Token refresh failed' });
+    console.error('Refresh error:', e);
+    return res.status(500).json({ success: false, error: 'Refresh failed' });
   }
 };
 
 exports.verifyToken = async (req, res) => {
   try {
-    const token = readBearerToken(req);
-    if (!token) return res.status(400).json({ success: false, error: 'Token required' });
+    const token = readBearerToken(req) || (req.body && req.body.token);
+    if (!token) return res.status(400).json({ success: false, error: 'token required' });
 
     const decoded = jwt.verify(token, getAccessSecret());
+    const userId = Number(decoded?.userId);
+    if (!userId) return res.status(401).json({ success: false, error: 'Invalid token' });
 
     const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, isActive: true },
+      where: { id: userId },
+      select: { id: true, username: true, email: true, fullName: true, role: true, branchId: true, isActive: true },
     });
 
-    if (!user || !user.isActive) {
-      return res.status(401).json({ success: false, error: 'User not found or deactivated' });
+    if (!user) return res.status(401).json({ success: false, error: 'User not found' });
+    if (!user.isActive) return res.status(403).json({ success: false, error: 'User is deactivated' });
+
+    const role = normalizeRole(user.role) || ROLES.MANAGER;
+    if (!isAllowedRole(role)) {
+      return res.status(403).json({ success: false, error: 'User role is invalid. Contact administrator.' });
     }
 
-    return res.json({ success: true, message: 'Token is valid' });
+    return res.json({
+      success: true,
+      data: {
+        valid: true,
+        user: { ...user, role },
+      },
+    });
   } catch (e) {
-    console.error('Verify token error:', e);
-    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    return res.status(401).json({ success: false, error: 'Invalid token' });
   }
 };
 
 exports.logout = async (req, res) => {
   try {
-    const token = (req.body && req.body.refreshToken) || readBearerToken(req);
-    if (!token) return res.status(400).json({ success: false, error: 'refreshToken required' });
-
-    // If refreshToken table exists, revoke the token
-    if (prisma.refreshToken?.update) {
+    const refreshToken = req.body && req.body.refreshToken;
+    if (refreshToken && prisma.refreshToken?.updateMany) {
       await prisma.refreshToken.updateMany({
-        where: { token },
+        where: { token: refreshToken },
         data: { revoked: true },
       });
     }
-
-    return res.json({ success: true, message: 'Logged out successfully' });
+    return res.json({ success: true, message: 'Logged out' });
   } catch (e) {
     console.error('Logout error:', e);
     return res.status(500).json({ success: false, error: 'Logout failed' });
@@ -332,12 +357,11 @@ exports.logout = async (req, res) => {
 
 exports.getCurrentUser = async (req, res) => {
   try {
-    const token = readBearerToken(req);
-    if (!token) return res.status(401).json({ success: false, error: 'Not authenticated' });
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: 'Not authenticated' });
 
-    const decoded = jwt.verify(token, getAccessSecret());
     const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
+      where: { id: Number(userId) },
       select: {
         id: true,
         username: true,
@@ -363,13 +387,3 @@ exports.getCurrentUser = async (req, res) => {
 
 // Export roles (useful for middleware validation)
 exports.ROLES = ROLES;
-
-module.exports = {
-  register: exports.register,
-  login: exports.login,
-  refreshToken: exports.refreshToken,
-  verifyToken: exports.verifyToken,
-  logout: exports.logout,
-  getCurrentUser: exports.getCurrentUser,
-  ROLES,
-};

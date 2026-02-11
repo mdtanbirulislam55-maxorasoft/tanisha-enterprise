@@ -1,16 +1,65 @@
+// ==================== TANISHA ENTERPRISE - FRONTEND API SERVICE ====================
+// Axios instance + interceptors + token refresh + typed API helpers
+// Production-safe: handles legacy localStorage keys and normalizes responses
+
 import axios from 'axios';
+import toast from 'react-hot-toast';
 import { TokenManager } from './tokenManager';
 
-// Base API configuration
+// ==================== CONFIGURATION ====================
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+// ==================== AXIOS INSTANCE ====================
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: API_BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request interceptor to add auth token
+// ==================== REFRESH TOKEN LOGIC ====================
+
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) prom.reject(error);
+    else prom.resolve(token);
+  });
+  failedQueue = [];
+};
+
+const refreshAccessToken = async () => {
+  try {
+    const refreshToken = TokenManager.getRefreshToken();
+    if (!refreshToken) throw new Error('No refresh token available');
+
+    const response = await axios.post(
+      `${API_BASE_URL}/auth/refresh`,
+      { refreshToken },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const data = response?.data;
+    if (!data?.success) throw new Error(data?.error || 'Token refresh failed');
+
+    const newAccessToken = data?.data?.accessToken;
+    if (!newAccessToken) throw new Error('No access token in refresh response');
+
+    TokenManager.setAccessToken(newAccessToken);
+    return newAccessToken;
+  } catch (err) {
+    TokenManager.clearTokens();
+    throw err;
+  }
+};
+
+// ==================== REQUEST INTERCEPTOR ====================
+
 api.interceptors.request.use(
   (config) => {
     const token = TokenManager.getAccessToken();
@@ -19,46 +68,43 @@ api.interceptors.request.use(
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
-// Response interceptor to handle token refresh
+// ==================== RESPONSE INTERCEPTOR ====================
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
 
-    // If error is 401 and not already retrying
     if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return api(originalRequest);
+          })
+          .catch((err) => Promise.reject(err));
+      }
+
       originalRequest._retry = true;
+      isRefreshing = true;
 
       try {
-        const refreshToken = TokenManager.getRefreshToken();
-        if (!refreshToken) {
-          throw new Error('No refresh token available');
-        }
-
-        // Try to refresh the token
-        const response = await axios.post(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/auth/refresh`,
-          { refreshToken }
-        );
-
-        const { accessToken } = response.data.data;
-        TokenManager.setAccessToken(accessToken);
-
-        // Retry the original request with new token
-        originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+        const newToken = await refreshAccessToken();
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        processQueue(null, newToken);
         return api(originalRequest);
       } catch (refreshError) {
-        // Refresh failed, clear tokens and redirect to login
+        processQueue(refreshError, null);
         TokenManager.clearTokens();
-        if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
-        }
+        window.location.href = '/login';
         return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
       }
     }
 
@@ -66,70 +112,102 @@ api.interceptors.response.use(
   }
 );
 
-// Auth API endpoints
+// ==================== AUTH API ====================
+
 export const authAPI = {
   login: (credentials) => api.post('/auth/login', credentials),
-  register: (userData) => api.post('/auth/register', userData),
-  logout: () => api.post('/auth/logout'),
-  verifyToken: (token) => api.post('/auth/verify-token', { token }),
+  register: (data) => api.post('/auth/register', data),
+  logout: (refreshToken) => api.post('/auth/logout', { refreshToken }),
   getCurrentUser: () => api.get('/auth/me'),
+  verifyToken: (token) => api.post('/auth/verify-token', { token }),
   refreshToken: (refreshToken) => api.post('/auth/refresh', { refreshToken }),
 };
 
-// User Management
+// ==================== USER API ====================
+
 export const userAPI = {
   getAll: (params) => api.get('/users', { params }),
   getById: (id) => api.get(`/users/${id}`),
   create: (data) => api.post('/users', data),
   update: (id, data) => api.put(`/users/${id}`, data),
   delete: (id) => api.delete(`/users/${id}`),
-  changePassword: (id, data) => api.post(`/users/${id}/change-password`, data),
 };
 
-// Customer Management
-export const customerAPI = {
-  getAll: (params) => api.get('/customers', { params }),
-  getById: (id) => api.get(`/customers/${id}`),
-  create: (data) => api.post('/customers', data),
-  update: (id, data) => api.put(`/customers/${id}`, data),
-  delete: (id) => api.delete(`/customers/${id}`),
-  getBalance: (id) => api.get(`/customers/${id}/balance`),
-};
+// ==================== PRODUCT API ====================
 
-// Product Management
 export const productAPI = {
   getAll: (params) => api.get('/products', { params }),
   getById: (id) => api.get(`/products/${id}`),
   create: (data) => api.post('/products', data),
   update: (id, data) => api.put(`/products/${id}`, data),
   delete: (id) => api.delete(`/products/${id}`),
-  getCategories: () => api.get('/products/categories'),
-  getLowStock: () => api.get('/products/low-stock'),
-  bulkUpdate: (data) => api.post('/products/bulk-update', data),
+  search: (query) => api.get('/products/search', { params: { q: query } }),
 };
 
-// Sales Management
-export const saleAPI = {
+// ==================== CUSTOMER API ====================
+
+export const customerAPI = {
+  getAll: (params) => api.get('/customers', { params }),
+  getById: (id) => api.get(`/customers/${id}`),
+  create: (data) => api.post('/customers', data),
+  update: (id, data) => api.put(`/customers/${id}`, data),
+  delete: (id) => api.delete(`/customers/${id}`),
+  search: (query) => api.get('/customers/search', { params: { q: query } }),
+};
+
+// ==================== SUPPLIER API ====================
+
+export const supplierAPI = {
+  getAll: (params) => api.get('/suppliers', { params }),
+  getById: (id) => api.get(`/suppliers/${id}`),
+  create: (data) => api.post('/suppliers', data),
+  update: (id, data) => api.put(`/suppliers/${id}`, data),
+  delete: (id) => api.delete(`/suppliers/${id}`),
+};
+
+// ==================== SALES API ====================
+
+export const salesAPI = {
   getAll: (params) => api.get('/sales', { params }),
   getById: (id) => api.get(`/sales/${id}`),
   create: (data) => api.post('/sales', data),
   update: (id, data) => api.put(`/sales/${id}`, data),
   delete: (id) => api.delete(`/sales/${id}`),
   getInvoice: (id) => api.get(`/sales/${id}/invoice`),
-  updateStatus: (id, status) => api.put(`/sales/${id}/status`, { status }),
 };
 
-// Purchase Management
+// ==================== PURCHASE API ====================
+
 export const purchaseAPI = {
   getAll: (params) => api.get('/purchases', { params }),
   getById: (id) => api.get(`/purchases/${id}`),
   create: (data) => api.post('/purchases', data),
   update: (id, data) => api.put(`/purchases/${id}`, data),
   delete: (id) => api.delete(`/purchases/${id}`),
-  updateStatus: (id, status) => api.put(`/purchases/${id}/status`, { status }),
 };
 
-// Payment Management
+// ==================== CATEGORY API ====================
+
+export const categoryAPI = {
+  getAll: (params) => api.get('/categories', { params }),
+  getById: (id) => api.get(`/categories/${id}`),
+  create: (data) => api.post('/categories', data),
+  update: (id, data) => api.put(`/categories/${id}`, data),
+  delete: (id) => api.delete(`/categories/${id}`),
+};
+
+// ==================== BRANCH API ====================
+
+export const branchAPI = {
+  getAll: (params) => api.get('/branches', { params }),
+  getById: (id) => api.get(`/branches/${id}`),
+  create: (data) => api.post('/branches', data),
+  update: (id, data) => api.put(`/branches/${id}`, data),
+  delete: (id) => api.delete(`/branches/${id}`),
+};
+
+// ==================== PAYMENT API ====================
+
 export const paymentAPI = {
   getAll: (params) => api.get('/payments', { params }),
   getById: (id) => api.get(`/payments/${id}`),
@@ -137,7 +215,8 @@ export const paymentAPI = {
   delete: (id) => api.delete(`/payments/${id}`),
 };
 
-// Stock Management
+// ==================== STOCK API ====================
+
 export const stockAPI = {
   getAll: (params) => api.get('/stock', { params }),
   getByProduct: (productId) => api.get(`/stock/product/${productId}`),
@@ -145,7 +224,8 @@ export const stockAPI = {
   transfer: (data) => api.post('/stock/transfer', data),
 };
 
-// Reports
+// ==================== REPORTS API ====================
+
 export const reportAPI = {
   dashboard: () => api.get('/reports/dashboard'),
   sales: (params) => api.get('/reports/sales', { params }),
@@ -156,7 +236,8 @@ export const reportAPI = {
   suppliers: (params) => api.get('/reports/suppliers', { params }),
 };
 
-// Dashboard
+// ==================== DASHBOARD API ====================
+
 export const dashboardAPI = {
   getSummary: () => api.get('/dashboard/summary'),
   getStats: () => api.get('/dashboard/stats'),
@@ -164,7 +245,8 @@ export const dashboardAPI = {
   getRecentActivity: () => api.get('/dashboard/recent-activity'),
 };
 
-// File Upload
+// ==================== FILE UPLOAD API ====================
+
 export const fileAPI = {
   upload: (file, onUploadProgress) => {
     const formData = new FormData();
@@ -177,16 +259,42 @@ export const fileAPI = {
   },
 };
 
-// Utilities
+// ==================== UTILITIES ====================
+
 export const handleAPIError = (error, customMessage) => {
   const message =
     error.response?.data?.error ||
     error.response?.data?.message ||
     customMessage ||
     'An error occurred';
-
+  toast.error(message);
   console.error('API Error:', error);
-  return message;
+  return Promise.reject(error);
 };
 
-export { api, TokenManager };
+export const handleAPISuccess = (message) => toast.success(message);
+
+// ==================== COMPATIBILITY EXPORTS ====================
+
+export const reportsAPI = {
+  getSalesSummary: (params) => api.get('/reports/sales', { params }),
+  getSalesByProduct: (params) => api.get('/reports/sales/by-product', { params }),
+  getSalesByCustomer: (params) => api.get('/reports/sales/by-customer', { params }),
+  getSalesByCategory: (params) => api.get('/reports/sales', { params: { ...params, groupBy: 'product' } }),
+  getDailySales: (params) => api.get('/reports/sales/daily', { params }),
+  getMonthlySales: (params) => api.get('/reports/sales/monthly', { params }),
+  getYearlySales: (params) => api.get('/reports/sales', { params: { ...params, groupBy: 'daily' } }),
+  getPurchaseSummary: (params) => api.get('/reports/purchase', { params }),
+};
+
+export const settingsAPI = {
+  getCompanySettings: () => api.get('/settings/company'),
+  updateCompanySettings: (data) => api.put('/settings/company', data),
+  getUsers: (params) => api.get('/users', { params }),
+  createUser: (data) => api.post('/users', data),
+  deleteUser: (id) => api.delete(`/users/${id}`),
+};
+
+export { TokenManager };
+
+export default api;
